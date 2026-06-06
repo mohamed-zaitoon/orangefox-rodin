@@ -55,7 +55,6 @@ PRODUCT_COPY_FILES += \
     $(DEVICE_PATH)/recovery/root/first_stage_ramdisk/fstab.emmc:recovery/root/first_stage_ramdisk/fstab.emmc \
     $(DEVICE_PATH)/recovery/root/first_stage_ramdisk/fstab.mt6899:recovery/root/first_stage_ramdisk/fstab.mt6899 \
     $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab:recovery/root/system/etc/recovery.fstab \
-    $(DEVICE_PATH)/recovery/root/system/etc/ueventd.rc:recovery/root/system/etc/ueventd.rc \
     $(DEVICE_PATH)/recovery/root/system/etc/init/android.hardware.fastboot-service.example_recovery.rc:recovery/root/system/etc/init/android.hardware.fastboot-service.example_recovery.rc
 
 RODIN_RECOVERY_MODULES := $(wildcard $(DEVICE_PATH)/recovery/root/lib/modules/*)
