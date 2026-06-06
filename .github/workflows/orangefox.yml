@@ -59,6 +59,17 @@ jobs:
         run: |
           set -euo pipefail
           df -h
+          free -h
+
+      - name: Prepare swap
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo fallocate -l 12G /swap-build.img
+          sudo chmod 600 /swap-build.img
+          sudo mkswap /swap-build.img
+          sudo swapon /swap-build.img
+          free -h
 
       - name: Sync OrangeFox
         shell: bash
@@ -98,14 +109,14 @@ jobs:
           NINJA_HIGHMEM_NUM_JOBS: "1"
           GOMAXPROCS: "1"
           GOGC: "20"
-          GOMEMLIMIT: "6GiB"
+          GOMEMLIMIT: "4GiB"
           _JAVA_OPTIONS: "-Xmx1g"
           LC_ALL: C
           USE_CCACHE: "1"
           CCACHE_EXEC: /usr/bin/ccache
         run: |
           set -eo pipefail
-          ccache -M 50G || true
+          ccache -M 20G || true
           source build/envsetup.sh
           lunch "${{ inputs.lunch }}"
           mka -j"${OF_BUILD_JOBS}" adbd "${{ inputs.build_target }}" 2>&1 | tee "$GITHUB_WORKSPACE/orangefox-build.log"
