@@ -61,26 +61,29 @@ jobs:
           df -h
           free -h
 
-      - name: Prepare swap
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo fallocate -l 12G /swap-build.img
-          sudo chmod 600 /swap-build.img
-          sudo mkswap /swap-build.img
-          sudo swapon /swap-build.img
-          free -h
-
       - name: Sync OrangeFox
         shell: bash
         run: |
           set -euo pipefail
+          (
+            while sleep 60; do
+              echo "Sync heartbeat:"
+              df -h "$GITHUB_WORKSPACE" /
+              free -h
+            done
+          ) &
+          heartbeat_pid=$!
+          trap 'kill "${heartbeat_pid}" 2>/dev/null || true' EXIT
           mkdir -p "$GITHUB_WORKSPACE/ofox-sync"
           git clone https://gitlab.com/OrangeFox/sync.git "$GITHUB_WORKSPACE/ofox-sync/sync"
           cd "$GITHUB_WORKSPACE/ofox-sync/sync"
           ./orangefox_sync.sh \
             --branch "${{ inputs.branch }}" \
             --path "$GITHUB_WORKSPACE/OrangeFox"
+          kill "${heartbeat_pid}" 2>/dev/null || true
+          trap - EXIT
+          df -h "$GITHUB_WORKSPACE" /
+          du -sh "$GITHUB_WORKSPACE/OrangeFox" || true
 
       - name: Place rodin device tree
         shell: bash
@@ -92,6 +95,17 @@ jobs:
             --exclude "images" \
             "$GITHUB_WORKSPACE/device-tree/" \
             "$GITHUB_WORKSPACE/OrangeFox/device/xiaomi/rodin/"
+
+      - name: Prepare swap
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo fallocate -l 12G /swap-build.img
+          sudo chmod 600 /swap-build.img
+          sudo mkswap /swap-build.img
+          sudo swapon /swap-build.img
+          df -h "$GITHUB_WORKSPACE" /
+          free -h
 
       - name: Build OrangeFox
         shell: bash
