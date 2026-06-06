@@ -16,9 +16,13 @@ on:
         required: true
         default: "vendorbootimage"
       runner:
-        description: Runner label
+        description: Runner label. ubuntu-latest-16-cores is the GitHub larger runner size with 64GB RAM.
         required: true
-        default: "ubuntu-latest"
+        default: "ubuntu-latest-16-cores"
+      build_jobs:
+        description: Parallel build jobs. Use 8 for 64GB runners, 1 for ubuntu-latest/self-hosted low-memory.
+        required: true
+        default: "8"
 
 jobs:
   build:
@@ -60,6 +64,10 @@ jobs:
           set -euo pipefail
           df -h
           free -h
+          mem_gib="$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 / 1024 }' /proc/meminfo)"
+          if [ "${mem_gib}" -lt 60 ]; then
+            echo "::warning::Runner has ${mem_gib}GiB RAM, not 64GiB. Use ubuntu-latest-16-cores or a 64GB self-hosted runner for the requested memory."
+          fi
 
       - name: Sync OrangeFox
         shell: bash
@@ -125,14 +133,14 @@ jobs:
           FOX_VIRTUAL_AB_DEVICE: "1"
           OF_FORCE_PREBUILT_KERNEL: "1"
           OF_LOW_MEMORY_BUILD: "1"
-          OF_BUILD_JOBS: "1"
-          NINJA_ARGS: "-j1 -l1"
-          SOONG_UI_NINJA_ARGS: "-j1 -l1"
-          NINJA_HIGHMEM_NUM_JOBS: "1"
-          GOMAXPROCS: "1"
+          OF_BUILD_JOBS: ${{ inputs.build_jobs }}
+          NINJA_ARGS: -j${{ inputs.build_jobs }} -l${{ inputs.build_jobs }}
+          SOONG_UI_NINJA_ARGS: -j${{ inputs.build_jobs }} -l${{ inputs.build_jobs }}
+          NINJA_HIGHMEM_NUM_JOBS: "2"
+          GOMAXPROCS: ${{ inputs.build_jobs }}
           GOGC: "20"
-          GOMEMLIMIT: "4GiB"
-          _JAVA_OPTIONS: "-Xmx1g"
+          GOMEMLIMIT: "16GiB"
+          _JAVA_OPTIONS: "-Xmx4g"
           LC_ALL: C
           USE_CCACHE: "0"
           CCACHE_EXEC: /usr/bin/ccache
