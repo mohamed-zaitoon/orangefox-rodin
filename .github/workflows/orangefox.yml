@@ -16,13 +16,13 @@ on:
         required: true
         default: "vendorbootimage"
       runner:
-        description: Runner label. ubuntu-latest-16-cores is the GitHub larger runner size with 64GB RAM.
+        description: Runner label. Use ubuntu-latest-16-cores only after enabling GitHub larger runners, or use a 64GB self-hosted label.
         required: true
-        default: "ubuntu-latest-16-cores"
+        default: "ubuntu-latest"
       build_jobs:
         description: Parallel build jobs. Use 8 for 64GB runners, 1 for ubuntu-latest/self-hosted low-memory.
         required: true
-        default: "8"
+        default: "1"
 
 jobs:
   build:
