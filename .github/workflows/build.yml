@@ -28,6 +28,7 @@ jobs:
   build:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 720
+
     steps:
       - name: Checkout device tree
         uses: actions/checkout@v4
@@ -37,29 +38,93 @@ jobs:
       - name: Install host packages
         shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y mkbootimg git curl zip unzip rsync lz4 bc bison flex build-essential
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            git gnupg gperf imagemagick lib32ncurses-dev lib32readline-dev \
+            lib32z1-dev libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev \
+            libssl-dev libxml2 libxml2-utils lz4 pngcrush rsync schedtool \
+            squashfs-tools unzip xsltproc zip zlib1g-dev mkbootimg
 
       - name: Install repo tool
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/bin"
           curl -L https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
+      - name: Show runner resources
+        shell: bash
+        run: |
+          df -h
+          free -h
+
       - name: Sync OrangeFox
         shell: bash
         run: |
+          set -euo pipefail
+          (
+            while sleep 60; do
+              echo "Heartbeat..."
+              df -h
+              free -h
+            done
+          ) &
+          HEARTBEAT_PID=$!
+          trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
+
           git clone https://gitlab.com/OrangeFox/sync.git "$GITHUB_WORKSPACE/ofox-sync"
           cd "$GITHUB_WORKSPACE/ofox-sync"
-          ./orangefox_sync.sh --branch "${{ inputs.branch }}" --path "$GITHUB_WORKSPACE/OrangeFox"
+
+          ./orangefox_sync.sh \
+            --branch "${{ inputs.branch }}" \
+            --path "$GITHUB_WORKSPACE/OrangeFox"
+
+          kill "$HEARTBEAT_PID" 2>/dev/null || true
+          trap - EXIT
 
       - name: Copy rodin device tree
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/OrangeFox/device/xiaomi"
-          rsync -a --delete --exclude ".git" "$GITHUB_WORKSPACE/device-tree/" "$GITHUB_WORKSPACE/OrangeFox/device/xiaomi/rodin/"
+
+          rsync -a --delete \
+            --exclude ".git" \
+            --exclude "images" \
+            "$GITHUB_WORKSPACE/device-tree/" \
+            "$GITHUB_WORKSPACE/OrangeFox/device/xiaomi/rodin/"
+
+      - name: Verify stock vendor_boot exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lh "$GITHUB_WORKSPACE/OrangeFox/device/xiaomi/rodin/prebuilt/vendor_boot_stock.img"
+
+      - name: Verify vendor ramdisk fragment
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lh "$GITHUB_WORKSPACE/OrangeFox/device/xiaomi/rodin/prebuilt/vendor_ramdisk00" || true
+
+      - name: Free space
+        shell: bash
+        run: |
+          rm -rf "$GITHUB_WORKSPACE/OrangeFox/.repo"
+          rm -rf "$GITHUB_WORKSPACE/ofox-sync"
+          df -h
+
+      - name: Create swap
+        shell: bash
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: Build OrangeFox
         shell: bash
@@ -70,44 +135,65 @@ jobs:
           FOX_AB_DEVICE: "1"
           FOX_VIRTUAL_AB_DEVICE: "1"
           OF_FORCE_PREBUILT_KERNEL: "1"
+          OF_LOW_MEMORY_BUILD: "1"
           OF_BUILD_JOBS: ${{ inputs.build_jobs }}
+          NINJA_ARGS: -j${{ inputs.build_jobs }}
+          SOONG_UI_NINJA_ARGS: -j${{ inputs.build_jobs }}
           USE_CCACHE: "0"
         run: |
+          set -eo pipefail
           source build/envsetup.sh
           lunch "${{ inputs.lunch }}"
           mka -j"${OF_BUILD_JOBS}" adbd "${{ inputs.build_target }}" 2>&1 | tee "$GITHUB_WORKSPACE/orangefox-build.log"
+
+      - name: Check original build vendor_boot result
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/OrangeFox/out/target/product/rodin/vendor_boot.img" ]; then
+            unpack_bootimg \
+              --boot_img "$GITHUB_WORKSPACE/OrangeFox/out/target/product/rodin/vendor_boot.img" \
+              | tee "$GITHUB_WORKSPACE/vendor_boot_info.txt"
+          fi
 
       - name: Repack stock vendor_boot with OrangeFox recovery
         if: always()
         shell: bash
         run: |
           set -euo pipefail
+
           PRODUCT="$GITHUB_WORKSPACE/OrangeFox/out/target/product/rodin"
           STOCK="$GITHUB_WORKSPACE/OrangeFox/device/xiaomi/rodin/prebuilt/vendor_boot_stock.img"
           RECOVERY_CPIO="$PRODUCT/vendor_ramdisk_recovery.cpio"
           OUT="$PRODUCT/vendor_boot_patched.img"
           UNPACK="$PRODUCT/stock_vendor_boot"
 
+          if [ ! -f "$STOCK" ]; then
+            echo "::error::Missing stock vendor_boot: $STOCK"
+            exit 1
+          fi
+
+          if [ ! -f "$RECOVERY_CPIO" ]; then
+            echo "::error::Missing OrangeFox recovery cpio: $RECOVERY_CPIO"
+            exit 1
+          fi
+
           rm -rf "$UNPACK"
           mkdir -p "$UNPACK"
 
           unpack_bootimg --boot_img "$STOCK" --out "$UNPACK"
 
-          AOSP_MKBOOTIMG="$GITHUB_WORKSPACE/OrangeFox/out/host/linux-x86/bin/mkbootimg"
+          RUNNER_MKBOOTIMG="$(command -v mkbootimg)"
+          echo "Using mkbootimg: $RUNNER_MKBOOTIMG"
+          mkbootimg --help | head -20 || true
 
-          "$AOSP_MKBOOTIMG" \
+          "$RUNNER_MKBOOTIMG" \
             --vendor_boot "$OUT" \
             --header_version 4 \
             --pagesize 4096 \
             --base 0x40000000 \
             --vendor_cmdline "bootopt=64S3,32N2,64N2 erofs.reserved_pages=64" \
             --vendor_ramdisk "$UNPACK/vendor_ramdisk00" \
-            --vendor_ramdisk_fragment "$UNPACK/vendor_ramdisk00" \
-            --ramdisk_name "" \
-            --ramdisk_type PLATFORM \
-            --vendor_ramdisk_fragment "$RECOVERY_CPIO" \
-            --ramdisk_name recovery \
-            --ramdisk_type RECOVERY \
             --dtb "$UNPACK/dtb" \
             --vendor_bootconfig "$UNPACK/bootconfig"
 
@@ -118,8 +204,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
-          find "$GITHUB_WORKSPACE/OrangeFox/out/target/product/rodin" -maxdepth 1 -type f \( -name "*.img" -o -name "*.zip" -o -name "*.txt" \) -exec cp -v {} "$GITHUB_WORKSPACE/artifacts/" \; || true
+
+          if [ -d "$GITHUB_WORKSPACE/OrangeFox/out/target/product/rodin" ]; then
+            find "$GITHUB_WORKSPACE/OrangeFox/out/target/product/rodin" \
+              -maxdepth 1 \
+              -type f \
+              \( -name "*.img" -o -name "*.zip" -o -name "*.txt" \) \
+              -exec cp -v {} "$GITHUB_WORKSPACE/artifacts/" \;
+          fi
+
           cp -v "$GITHUB_WORKSPACE/orangefox-build.log" "$GITHUB_WORKSPACE/artifacts/" || true
+          cp -v "$GITHUB_WORKSPACE/vendor_boot_info.txt" "$GITHUB_WORKSPACE/artifacts/" || true
           cp -v "$GITHUB_WORKSPACE/vendor_boot_patched_info.txt" "$GITHUB_WORKSPACE/artifacts/" || true
 
       - name: Upload artifacts
